@@ -1,5 +1,6 @@
 # HUProxy
 
+Copyright 2018 David Marby, based on [https://github.com/google/huproxy.git](https://github.com/google/huproxy.git)
 Copyright 2017 Google Inc.
 
 This is not a Google product.
