@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -24,36 +23,19 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	"github.com/pkg/browser"
 
-	huproxy "github.com/google/huproxy/lib"
+	huproxy "github.com/DMarby/huproxy/lib"
 )
 
 var (
 	writeTimeout = flag.Duration("write_timeout", 10*time.Second, "Write timeout")
-	basicAuth    = flag.String("auth", "", "HTTP Basic Auth in @<filename> or <username>:<password> format.")
 	verbose      = flag.Bool("verbose", false, "Verbose.")
 )
-
-func secretString(s string) (string, error) {
-	if strings.HasPrefix(s, "@") {
-		fn := s[1:]
-		st, err := os.Stat(fn)
-		if err != nil {
-			return "", err
-		}
-		p := st.Mode() & os.ModePerm
-		if p&0177 > 0 {
-			return "", fmt.Errorf("valid permissions for %q is %0o, was %0o", fn, 0600, p)
-		}
-		b, err := ioutil.ReadFile(fn)
-		return strings.TrimSpace(string(b)), err
-	}
-	return s, nil
-}
 
 func dialError(url string, resp *http.Response, err error) {
 	if resp != nil {
@@ -71,34 +53,15 @@ func dialError(url string, resp *http.Response, err error) {
 	log.Fatalf("Dial to %q fail: %v", url, err)
 }
 
-func main() {
-	flag.Parse()
-
-	if flag.NArg() != 1 {
-		log.Fatalf("Want exactly one arg")
-	}
-	url := flag.Arg(0)
-
-	if *verbose {
-		log.Printf("huproxyclient %s", huproxy.Version)
-	}
-
+func setupConnection(url string, token string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	dialer := websocket.Dialer{}
 	head := map[string][]string{}
 
-	// Add basic auth.
-	if *basicAuth != "" {
-		ss, err := secretString(*basicAuth)
-		if err != nil {
-			log.Fatalf("Error reading secret string %q: %v", *basicAuth, err)
-		}
-		a := base64.StdEncoding.EncodeToString([]byte(ss))
-		head["Authorization"] = []string{
-			"Basic " + a,
-		}
+	head["Authorization"] = []string{
+		"Bearer " + token,
 	}
 
 	conn, resp, err := dialer.Dial(url, head)
@@ -144,4 +107,49 @@ func main() {
 	if ctx.Err() != nil {
 		os.Exit(1)
 	}
+}
+
+func retrieveAuthenticationToken() string {
+	m := mux.NewRouter()
+
+	s := &http.Server{
+		Addr:    "127.0.0.1:8087",
+		Handler: m,
+	}
+
+	channel := make(chan string)
+
+	m.HandleFunc("/callback/{token}", func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		token := vars["token"]
+
+		fmt.Fprint(w, "Done authenticating")
+		channel <- token
+	})
+
+	go func() {
+		s.ListenAndServe()
+	}() // TODO: Can we simplify to not wrap in func?
+
+	browser.OpenURL("https://ssh.home.dmarby.se/auth") // TODO: Don't hardcode url
+
+	return <-channel
+}
+
+func main() {
+	flag.Parse()
+
+	if flag.NArg() != 1 {
+		log.Fatalf("Want exactly one arg")
+	}
+	url := flag.Arg(0)
+
+	if *verbose {
+		log.Printf("huproxyclient %s", huproxy.Version)
+	}
+
+	log.Printf("huproxy %s", huproxy.Version)
+	token := retrieveAuthenticationToken() // TODO: error handling
+
+	setupConnection(url, token)
 }

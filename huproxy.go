@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -26,7 +27,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 
-	huproxy "github.com/google/huproxy/lib"
+	huproxy "github.com/DMarby/huproxy/lib"
 )
 
 var (
@@ -96,6 +97,15 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleAuth(w http.ResponseWriter, r *http.Request) {
+	var cookie, err = r.Cookie("jwt_token")
+	if err != nil {
+		http.Error(w, "Something went wrong", 500)
+		return
+	}
+
+	http.Redirect(w, r, fmt.Sprintf("http://localhost:8087/callback/%s", cookie.Value), http.StatusFound)
+}
 func main() {
 	flag.Parse()
 
@@ -111,6 +121,7 @@ func main() {
 	log.Printf("huproxy %s", huproxy.Version)
 	m := mux.NewRouter()
 	m.HandleFunc("/proxy/{host}/{port}", handleProxy)
+	m.HandleFunc("/auth", handleAuth)
 	s := &http.Server{
 		Addr:           *listen,
 		Handler:        m,
