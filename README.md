@@ -1,55 +1,48 @@
 # HUProxy
-
-Copyright 2018 David Marby, based on [https://github.com/google/huproxy.git](https://github.com/google/huproxy.git)
-Copyright 2017 Google Inc.
-
-This is not a Google product.
-
 HTTP(S)-Upgrade Proxy — Tunnel anything (but primarily SSH) over HTTP
 websockets.
 
-## Why
+## Server setup
+This is built to work with [Caddy](https://github.com/mholt/caddy) and [loginsrv](https://github.com/tarent/loginsrv), using Google authentication.
 
-The reason for not simply using a SOCKS proxy or similar is that they tend to
-take up an entire port, while huproxy only takes up a single URL subdirectory.
-
-There's also
-[SSL/SSH multiplexers](http://www.rutschle.net/tech/sslh.shtml)
-but they:
-
-1. Take over the port and front both the web server and SSH, instead of letting
-   the web server be the primary owner of port 443.
-2. For SSH don't look like SSL for packet inspectors, because they're not.
-3. Hide the original client address from the web server (without some
-   [interesting iptables magic](https://github.com/yrutschle/sslh#transparent-proxy-support)).
-4. Only allow connecting to the server itself, not treat it as a proxy jumpgate.
-
-## Setup
-
-### nginx
-
-#### Create user
-
+Add the following configuration to caddy:
 ```
-sudo htpasswd -c /etc/nginx/users.proxy thomas
-```
+auth.example.com {
+    tls example@example.com
 
-#### Add config to nginx
+    redir 302 {
+        if {path} is /
+        / /login
+    }
 
-```
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-         '' close;
+    login {
+        google client_id={client_id},client_secret={client_secret},scope=https://www.googleapis.com/auth/userinfo.email
+        redirect_check_referer false
+        redirect_host_file /etc/redirect_hosts.txt
+        cookie_domain example.com
+    }
 }
-location /proxy {
-    auth_basic "Proxy";
-    auth_basic_user_file /etc/nginx/users.proxy;
-    proxy_pass http://127.0.0.1:8086;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    # proxy_set_header Connection "upgrade";
-    proxy_set_header Connection $connection_upgrade;
+
+ssh.example.com {
+    tls example@example.com
+
+    jwt {
+        path /
+        redirect https://auth.example.com/login?backTo=https%3A%2F%2F{host}{rewrite_uri_escaped}
+        allow sub example@example.com
+    }
+
+    proxy / http://127.0.0.1:8086 {
+        transparent
+        websocket
+    }
 }
+
+```
+
+Create a file named `/etc/redirect_hosts.txt` containing the following:
+```
+ssh.example.com
 ```
 
 Start proxy:
@@ -58,26 +51,24 @@ Start proxy:
 ./huproxy
 ```
 
-## Running
+## Using the client
 
-These commands assume that HTTPS is used. If not, then change "wss://"
-to "ws://".
+Add the following to your SSH config (`~/.ssh/config`):
 
 ```
-echo thomas:secretpassword > ~/.huproxy.pw
-chmod 600 ~/.huproxy.pw
-cat >> ~/.ssh/config << EOF
 Host shell.example.com
-    ProxyCommand /path/to/huproxyclient -auth=@$HOME/.huproxy.pw wss://proxy.example.com/proxy/%h/%p
-EOF
+    ProxyCommand /path/to/huproxyclient wss://ssh.example.com/proxy/%h/%p
+```
 
+Then you can SSH to `shell.example.com` through the proxy by running:
+```
 ssh shell.example.com
 ```
 
-Or manually with these commands:
+## License
+See [LICENSE](LICENSE)
 
-```
-ssh -o 'ProxyCommand=./huproxyclient -auth=thomas:secretpassword wss://proxy.example.com/proxy/%h/%p' shell.example.com
-ssh -o 'ProxyCommand=./huproxyclient -auth=@<(echo thomas:secretpassword) wss://proxy.example.com/proxy/%h/%p' shell.example.com
-ssh -o 'ProxyCommand=./huproxyclient -auth=@$HOME/.huproxy.pw wss://proxy.example.com/proxy/%h/%p' shell.example.com
-```
+Copyright 2018 David Marby  
+Copyright 2017 Google Inc.
+
+This is not a Google product.
